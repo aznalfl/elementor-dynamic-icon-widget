@@ -1,6 +1,6 @@
 # Dynamic Icon Widget for Elementor
 
-This plugin adds a custom "Dynamic Icon" widget to Elementor, which allows you to dynamically select an SVG icon. It retains all the functionality of the default Elementor Icon widget.
+This plugin adds a custom "Dynamic Icon" widget to Elementor, which allows you to dynamically select an SVG icon. It retains most the functionality of the default Elementor Icon widget.
 
 ## Features
 
