@@ -11,7 +11,7 @@ This plugin adds a custom "Dynamic Icon" widget to Elementor, which allows you t
 
 ## Installation
 
-1. Download the plugin files as a zip.
+1. Download the repo root files as a zip.
 2. Install the plugin through the WordPress plugins screen directly.
 3. Activate the plugin through the 'Plugins' screen in WordPress.
 
