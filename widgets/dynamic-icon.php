@@ -1,5 +1,11 @@
 <?php
-namespace Elementor;
+namespace DynamicIconWidget;
+
+use Elementor\Controls_Manager;
+use Elementor\Core\Kits\Documents\Tabs\Global_Colors;
+use Elementor\Icons_Manager;
+use Elementor\Plugin;
+use Elementor\Widget_Base;
 
 if (!defined("ABSPATH")) {
     exit(); // Exit if accessed directly.
@@ -43,7 +49,7 @@ class Widget_Dynamic_Icon extends Widget_Base
             "type" => Controls_Manager::MEDIA,
             "media_type" => "image",
             "description" => esc_html__(
-                "Select an SVG file for the icon.",
+                "Select an SVG file for the icon. The selected media must be a valid SVG attachment in the WordPress media library.",
                 "dynamic-icon-widget"
             ),
             "dynamic" => [
@@ -85,6 +91,24 @@ class Widget_Dynamic_Icon extends Widget_Base
             ],
         ]);
 
+        $this->add_control("aria_label", [
+            "label" => esc_html__(
+                "Accessible Label (aria-label)",
+                "dynamic-icon-widget"
+            ),
+            "type" => Controls_Manager::TEXT,
+            "dynamic" => [
+                "active" => true,
+            ],
+            "description" => esc_html__(
+                "Adds an aria-label to the link, for screen reader users. If left blank, the selected SVG attachment's media library title is used as a fallback where available.",
+                "dynamic-icon-widget"
+            ),
+            "condition" => [
+                "link[url]!" => "",
+            ],
+        ]);
+
         $this->end_controls_section();
 
         $this->start_controls_section("section_style_icon", [
@@ -96,18 +120,23 @@ class Widget_Dynamic_Icon extends Widget_Base
             "label" => esc_html__("Alignment", "dynamic-icon-widget"),
             "type" => Controls_Manager::CHOOSE,
             "options" => [
-                "left" => [
-                    "title" => esc_html__("Left", "dynamic-icon-widget"),
+                "start" => [
+                    "title" => esc_html__("Start", "dynamic-icon-widget"),
                     "icon" => "eicon-text-align-left",
                 ],
                 "center" => [
                     "title" => esc_html__("Center", "dynamic-icon-widget"),
                     "icon" => "eicon-text-align-center",
                 ],
-                "right" => [
-                    "title" => esc_html__("Right", "dynamic-icon-widget"),
+                "end" => [
+                    "title" => esc_html__("End", "dynamic-icon-widget"),
                     "icon" => "eicon-text-align-right",
                 ],
+            ],
+            "classes" => "elementor-control-start-end",
+            "selectors_dictionary" => [
+                "left" => is_rtl() ? "end" : "start",
+                "right" => is_rtl() ? "start" : "end",
             ],
             "default" => "center",
             "selectors" => [
@@ -135,8 +164,7 @@ class Widget_Dynamic_Icon extends Widget_Base
                     "fill: {{VALUE}};",
             ],
             "global" => [
-                "default" =>
-                    \Elementor\Core\Kits\Documents\Tabs\Global_Colors::COLOR_PRIMARY,
+                "default" => Global_Colors::COLOR_PRIMARY,
             ],
         ]);
 
@@ -224,15 +252,14 @@ class Widget_Dynamic_Icon extends Widget_Base
         $this->add_control("fit_to_size", [
             "label" => esc_html__("Fit to Size", "dynamic-icon-widget"),
             "type" => Controls_Manager::SWITCHER,
-            "description" =>
+            "description" => esc_html__(
                 'Avoid gaps around icons when width and height aren\'t equal',
+                "dynamic-icon-widget"
+            ),
             "label_off" => esc_html__("Off", "dynamic-icon-widget"),
             "label_on" => esc_html__("On", "dynamic-icon-widget"),
-            "condition" => [
-                "selected_icon[library]" => "svg",
-            ],
             "selectors" => [
-                "{{WRAPPER}} .elementor-icon-wrapper svg" => "width: 100%;",
+                "{{WRAPPER}} .elementor-icon-wrapper svg" => "width: auto;",
             ],
         ]);
 
@@ -309,11 +336,66 @@ class Widget_Dynamic_Icon extends Widget_Base
         $this->end_controls_section();
     }
 
+    /**
+     * Resolve the widget's media control value to a validated SVG attachment ID.
+     *
+     * Never touches a URL or filesystem path directly - resolution goes only
+     * through core WordPress lookups (attachment post + its stored mime type),
+     * so there is no path by which an arbitrary URL or stream wrapper can reach
+     * a file read.
+     *
+     * @return int 0 if the settings hold no usable, validated SVG attachment.
+     */
+    private function get_validated_svg_attachment_id($media)
+    {
+        if (!is_array($media)) {
+            return 0;
+        }
+
+        $attachment_id = absint($media["id"] ?? 0);
+
+        if (!$attachment_id && !empty($media["url"])) {
+            $attachment_id = attachment_url_to_postid($media["url"]);
+        }
+
+        if (
+            !$attachment_id ||
+            "attachment" !== get_post_type($attachment_id) ||
+            "image/svg+xml" !== get_post_mime_type($attachment_id)
+        ) {
+            return 0;
+        }
+
+        return $attachment_id;
+    }
+
+    private function render_editor_placeholder()
+    {
+        ?>
+        <div class="elementor-icon-wrapper dynamic-icon-widget__placeholder">
+            <div class="elementor-icon" style="display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px dashed #a4afb7;border-radius:3px;color:#a4afb7;font-size:16px;">
+                <i class="eicon-image-bold" aria-hidden="true"></i>
+            </div>
+        </div>
+        <?php
+    }
+
     protected function render()
     {
         $settings = $this->get_settings_for_display();
 
-        if (empty($settings["icon_svg"]["url"])) {
+        $media = $settings["icon_svg"] ?? [];
+
+        if (!is_array($media) || (empty($media["id"]) && empty($media["url"]))) {
+            return; // Nothing selected yet - blank widget, no placeholder needed.
+        }
+
+        $attachment_id = $this->get_validated_svg_attachment_id($media);
+
+        if (!$attachment_id) {
+            if (Plugin::$instance->editor->is_edit_mode()) {
+                $this->render_editor_placeholder();
+            }
             return;
         }
 
@@ -339,15 +421,38 @@ class Widget_Dynamic_Icon extends Widget_Base
             $this->add_link_attributes("icon-wrapper", $settings["link"]);
 
             $icon_tag = "a";
+
+            // Manual aria_label always wins; otherwise fall back to whatever
+            // WordPress already has stored as the attachment's title (which
+            // may itself be filename-derived - we don't reprocess it here).
+            $accessible_label = !empty($settings["aria_label"])
+                ? $settings["aria_label"]
+                : get_the_title($attachment_id);
+
+            if (!empty($accessible_label)) {
+                $this->add_render_attribute(
+                    "icon-wrapper",
+                    "aria-label",
+                    $accessible_label
+                );
+            }
         }
         ?>
         <div <?php $this->print_render_attribute_string("wrapper"); ?>>
             <<?php echo $icon_tag; ?> <?php $this->print_render_attribute_string(
      "icon-wrapper"
  ); ?>>
-            <?php if (!empty($settings["icon_svg"]["url"])) {
-                echo file_get_contents($settings["icon_svg"]["url"]);
-            } ?>
+                <span class="dynamic-icon-widget__svg" aria-hidden="true">
+                <?php
+                // Icons_Manager::render_uploaded_svg_icon() ignores the attributes
+                // argument for uploaded SVG icons, so aria-hidden is applied to this
+                // wrapper rather than passed to render_icon().
+                Icons_Manager::render_icon([
+                    "library" => "svg",
+                    "value" => ["id" => $attachment_id],
+                ]);
+                ?>
+                </span>
             </<?php echo $icon_tag; ?>>
         </div>
         <?php
@@ -357,16 +462,45 @@ class Widget_Dynamic_Icon extends Widget_Base
     {
         ?>
         <#
-        var link = settings.link.url ? 'href="' + settings.link.url + '"' : '',
-            iconTag = link ? 'a' : 'div';
-        #>
-        <div class="elementor-icon-wrapper">
-            <{{{ iconTag }}} class="elementor-icon elementor-animation-{{ settings.hover_animation }}" {{{ link }}}>
-                <# if ( settings.icon_svg.url ) { #>
-                    <img src="{{ settings.icon_svg.url }}" alt="">
-                <# } #>
-            </{{{ iconTag }}}>
-        </div>
+        var media = settings.icon_svg || {};
+
+        if ( ! media.id && ! media.url ) {
+            return;
+        }
+
+        var icon = { library: 'svg', value: { id: media.id, url: media.url } },
+            iconHTML = elementor.helpers.renderIcon( view, icon, {}, 'div', 'object' );
+
+        if ( ! iconHTML || ! iconHTML.value ) { #>
+            <div class="elementor-icon-wrapper dynamic-icon-widget__placeholder">
+                <div class="elementor-icon" style="display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px dashed #a4afb7;border-radius:3px;color:#a4afb7;font-size:16px;">
+                    <i class="eicon-image-bold" aria-hidden="true"></i>
+                </div>
+            </div>
+        <# } else {
+            var iconTag = 'div';
+
+            if ( settings.link && settings.link.url ) {
+                view.addRenderAttribute( 'link_url', 'href', elementor.helpers.sanitizeUrl( settings.link.url ) );
+                iconTag = 'a';
+
+                if ( settings.aria_label ) {
+                    view.addRenderAttribute( 'link_url', 'aria-label', settings.aria_label );
+                }
+            }
+
+            view.addRenderAttribute( 'icon', 'class', 'elementor-icon' );
+
+            if ( settings.hover_animation ) {
+                view.addRenderAttribute( 'icon', 'class', 'elementor-animation-' + settings.hover_animation );
+            }
+            #>
+            <div class="elementor-icon-wrapper">
+                <{{{ iconTag }}} {{{ view.getRenderAttributeString( 'icon' ) }}} {{{ view.getRenderAttributeString( 'link_url' ) }}}>
+                    <span class="dynamic-icon-widget__svg" aria-hidden="true">{{{ iconHTML.value }}}</span>
+                </{{{ iconTag }}}>
+            </div>
+        <# } #>
         <?php
     }
 }
